@@ -222,7 +222,7 @@ dpdkx::device::device(config::device config)
         else {
             logging::logger<dpdkx::device>().info("device {} - {} doesn't support clock, disabling...", config.port_id, config.info.driver_name);
             config_.features.reset(config::device::dev_clock);
-            config_.clock_hz = 1; // to avoid division by zero
+            config_.clock_hz = NS_PER_S; // assuming that timestamp is in ns to make timestamp_fix returns roughly what it gets/ as well aslo avoid division by zero
         }
     }
 
