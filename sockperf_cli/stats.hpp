@@ -1,6 +1,7 @@
 #pragma once
 #include "sockperf/sockperf.hpp"
 #include <boost/iostreams/device/mapped_file.hpp>
+#include <boost/program_options.hpp>
 #include <numeric>
 #include <vector>
 #include <array>
@@ -17,13 +18,11 @@ public:
 		std::uint64_t sent;
 		std::uint64_t received;
 		std::uint64_t enqueued_rx;
+        std::uint16_t size;
 	};
-	const auto& requested_slots(std::uint8_t queue) const noexcept { return buckets_[queue].next_slot; }
-	auto requested_slots() const noexcept { return std::accumulate(cbegin(buckets_), cend(buckets_), 0, [](auto l, auto const& r) {return l + r.next_slot; }); }
+	constexpr auto requested_slots() const noexcept { return next_slot_; }
 	packet_info& slot(std::uint8_t queue);
-	void process();
-	packet_info const* front(std::uint8_t queue) const;
-	packet_info const* back(std::uint8_t queue) const;
+	void process(boost::program_options::variables_map const& options);
 private:
 	using two_slots = std::array<packet_info, 2>;
 	class mapped_file {
@@ -33,13 +32,10 @@ private:
 	private:
 		boost::iostreams::mapped_file_sink sink_;
 	};
-	struct bucket {
-		packet_info* slots;
-		size_type next_slot = 0;
-		size_type size = 0;
-	};
-	packet_info dummy_;
-	std::array<bucket, 16> buckets_;
-	std::vector<std::variant<two_slots, mapped_file>> buckets_memory_;
+	std::uint8_t txq_n_ ;
+	packet_info* slots_;
+	size_type next_slot_ = 0;
+	size_type size_ = 0;
+	std::variant<two_slots, mapped_file> memory_;
 };
 

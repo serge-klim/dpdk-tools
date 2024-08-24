@@ -24,10 +24,13 @@ boost::program_options::options_description common_options()
        ("throughput-test,t", boost::program_options::value<std::size_t>()->default_value(0)->implicit_value(default_throughput_n_packets), "\tthroughput test (burst send)[number of packets requests to send]")
        ("no-warmup", boost::program_options::value<bool>()->default_value(false)->implicit_value(true), "\tskip warmup")
        ("burst-size,b", boost::program_options::value<std::uint16_t>(), "\trx burst size")
-       ("multi-tx-queue", boost::program_options::value<bool>()->implicit_value(true)->default_value(false), "\ttx multi queues")
+       //("multi-tx-queue", boost::program_options::value<bool>()->implicit_value(true)->default_value(false), "\ttx multi queues")
+       ("txq", boost::program_options::value<std::uint16_t>()->default_value(1), "\tnumber of tx queues")
        ("tx-mempool-size", boost::program_options::value<unsigned>()->default_value(1024 * 4 - 1), "\tnumber of element in rx memory pool(per tx queues)")
-       ("wait-for,w", boost::program_options::value<std::chrono::milliseconds>()->default_value(std::chrono::seconds{ 3 }, "3 sec"), "\twait for response")
+       ("wait-for,w", boost::program_options::value<std::chrono::milliseconds>()->default_value(std::chrono::seconds{ 5 }, "5 sec"), "\twait for response")
        ("detailed-stats", boost::program_options::value<bool>()->default_value(false)->implicit_value(true), "\tdetailed stats")
+       ("buckets,b", boost::program_options::value<std::list<std::chrono::nanoseconds>>()/*->implicit_value(std::list<std::chrono::nanoseconds>{},"")*/, "\thistogram buckets for packet to packet timing," 
+                                                                                                                                                          " displayed when detailed-stats option is selected")
        ("verbose,v", boost::program_options::value<bool>()->default_value(false)->implicit_value(true), "\tverbose")
        ;
    // clang-format on

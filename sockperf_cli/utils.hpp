@@ -4,8 +4,6 @@
 #include "dpdkx/jobs.hpp"
 #include "dpdkx/rx_channel.hpp"
 #include "dpdkx/mempool.hpp"
-#include "utils/histogram/chrono_axes.hpp"
-#include <boost/histogram.hpp>
 #include <chrono>
 #include <atomic>
 #include <vector>
@@ -49,17 +47,13 @@ struct message_info {
 class sockperf_channel : public dpdkx::rx_channel {
 public:
     sockperf_channel(use_make_rx_channel, dpdkx::device& device, sockaddr_in const& addr, std::size_t packets2send, bool detailed_stats = false);
-    constexpr auto packets_received() const { return received_; }
+    constexpr auto packets_received() const { return stats_.requested_slots(); }
     constexpr statistics& stats() noexcept { return stats_; }
     constexpr statistics const& stats() const noexcept { return stats_; }
-    auto time() const noexcept { return std::make_pair(end_.first - start_.first, end_.second == (std::chrono::high_resolution_clock::time_point::min)() ? std::chrono::high_resolution_clock::duration::zero() : end_.second - start_.second); }
     auto last_warmup_message() const noexcept { return last_warmup_message_.load(); }
     bool enqueue(dpdkx::queue_id_t queue_id, rte_ipv4_hdr* ipv4hdr, rte_mbuf* buffer) override;
 private:
     std::size_t packets2send_ = 0;    
-    std::size_t received_ = 0;
-    std::pair<std::uint64_t, std::chrono::high_resolution_clock::time_point> start_ = { 0, (std::chrono::high_resolution_clock::time_point::min)() };
-    std::pair<std::uint64_t, std::chrono::high_resolution_clock::time_point> end_ = { 0, (std::chrono::high_resolution_clock::time_point::min)()};
     statistics stats_;
     std::atomic<std::shared_ptr<message_info>> last_warmup_message_;
 };

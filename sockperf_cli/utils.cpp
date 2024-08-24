@@ -157,7 +157,7 @@ dpdkx::job_state latency_test_job::process() {
                     if (auto msg = rx_channel_.last_warmup_message()) {
                         if (msg->seqn == sockperf::x::warmup(seqn)) {
                             auto received_at = use_dev_clock ? device.timestamp_fix(msg->received_ts) : msg->enqueued_ts;
-                            BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << " reply time = " 
+                            BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << " rtt = " 
                                                        << std::chrono::duration_cast<std::chrono::duration<double,std::micro>>(std::chrono::nanoseconds{ received_at - sent_at }).count() << " us.";
                             break;                            
                         }
@@ -226,14 +226,16 @@ dpdkx::job_state tx_job::process() {
     //auto dev_dur = device_.read_clock() - std::get<rte_mbuf_timestamp_t>(start);
     auto dev_dur = device_.read_clock() - start;
     auto const bytes_sent = seqn * packet_size(payload_size_);
-    BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "packet size: "<< packet_size(payload_size_) << " bytes / payload size: " << payload_size_ <<" bytes ";
-    //BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "tx queue : " << queue_id_ << " : " << bytes_sent <<" bytes in "<< seqn << " packets has been sent in " << std::chrono::duration_cast<std::chrono::microseconds>(duration).count() << " us - "
+    BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "tx queue: " << queue_id_ << ":packet size: "<< packet_size(payload_size_) << " bytes / payload size: " << payload_size_ <<" bytes \n\t\t"
+    //BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "tx queue: " << queue_id_ << " : " << bytes_sent <<" bytes in "<< seqn << " packets has been sent in " << std::chrono::duration_cast<std::chrono::microseconds>(duration).count() << " us - "
     //                        << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds{dev_dur}).count() << " us : " << dev_dur << " ticks " << ns_timer_dur <<" ns."
     //    << "\n\t\t~" << static_cast<double>(bytes_sent * 8) / duration.count()
     //                        <<"/" <<static_cast<double>(bytes_sent * 8) / dev_dur << " Gbps " << seqn * std::nano::den / (duration.count() == 0 ? 1 : duration.count()) << " packets per second";
-    BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "tx queue : " << queue_id_ << " : " << bytes_sent <<" bytes in "<< seqn << " packets has been sent in " 
-                                                          << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds{dev_dur}).count() << " us : " << dev_dur << " ticks "
-        << "\n\t\t~" <<static_cast<double>(bytes_sent * 8) / dev_dur << " Gbps " << seqn * std::nano::den / (dev_dur == 0 ? 1 : dev_dur) << " packets per second";
+    /*BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "tx queue:" << queue_id_ << " : "*/ << bytes_sent <<" bytes in "<< seqn << " packets has been sent in " 
+                                                          << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds{dev_dur}).count() << " us : " << dev_dur << " ticks / "
+         << seqn * std::nano::den / (dev_dur == 0 ? 1 : dev_dur) << " packets per second"
+        " (~" <<static_cast<double>(bytes_sent * 8) / dev_dur << " Gbps)"
+        ;
     return dpdkx::job_state::done;
 }
 
@@ -270,8 +272,8 @@ std::error_code tx_job::warmup(sockperf_channel& channel, std::vector<dpdkx::job
 
 sockperf_channel::sockperf_channel(use_make_rx_channel, dpdkx::device& device, sockaddr_in const& addr, std::size_t packets2send, bool detailed_stats /*= false*/)
     : dpdkx::rx_channel{ dpdkx::rx_channel::use_make_rx_channel{}, device, addr }
-    , packets2send_{ packets2send }
-    , stats_{ detailed_stats ? packets2send : std::size_t{2} }
+    , packets2send_{ packets2send * device.ntx()}
+    , stats_{ detailed_stats ? packets2send_ : std::size_t{2} , static_cast<std::uint8_t>(device.ntx()) }
 {
 }
 
@@ -284,12 +286,6 @@ bool sockperf_channel::enqueue(dpdkx::queue_id_t /*queue_id*/, rte_ipv4_hdr* /*i
     if (buffer->data_len >= msg_header_size + sockperf::header_size()) {
         auto payload = rte_pktmbuf_mtod_offset(buffer, char*, msg_header_size);
         switch (auto type = sockperf::message_type(payload, buffer->data_len - msg_header_size)) {
-            //case sockperf::type::WarmupPing:
-            //    [[fallthrough]];
-            //case sockperf::type::WarmupPong:
-            //    if (auto seqn = sockperf::seqn(payload, buffer->data_len - msg_header_size); last_warmup_message_ < seqn)
-            //        last_warmup_message_ = seqn;
-            //    break;
             case sockperf::type::Ping:
                 [[fallthrough]];
             case sockperf::type::Pong: {
@@ -302,23 +298,18 @@ bool sockperf_channel::enqueue(dpdkx::queue_id_t /*queue_id*/, rte_ipv4_hdr* /*i
                     last_warmup_message_ = received_msg_info;
                     break;
                 }
-                auto queue = std::uint8_t{};
-                std::tie(queue,seqn) = sockperf::x::split_seqn(seqn);
-                if (queue == 0) {
-                    #pragma message("track stats per queue")
-                    if (auto payload_size = sockperf::payload_size(payload, buffer->data_len - msg_header_size); payload_size >= sizeof(rte_mbuf_timestamp_t)) {
-                        auto& info = stats_.slot(0);
-                        info.seqn = seqn;
-                        static_assert(std::is_same_v<decltype(info.sent), rte_mbuf_timestamp_t>, "oops! packet sent timestamp type needs to be adjusted");
-                        //auto packet_sent = rte_mbuf_timestamp_t{};
-                        std::memcpy(&info.sent, sockperf::payload(payload, buffer->data_len - msg_header_size), sizeof(info.sent));
-                        info.received = timestamp ? device().timestamp_fix(*timestamp) : enqueued;
-                        info.enqueued_rx = enqueued;
-                    }
-                    if (++received_ == packets2send_) {
-                        end_.second = std::chrono::high_resolution_clock::now();
+                if (auto payload_size = sockperf::payload_size(payload, buffer->data_len - msg_header_size); payload_size >= sizeof(rte_mbuf_timestamp_t)) {
+                    if (stats_.requested_slots() == packets2send_) {
                         dpdkx::stop_jobs();
+                        break;
                     }
+                    auto& info = stats_.slot(0);
+                    info.seqn = seqn;
+                    static_assert(std::is_same_v<decltype(info.sent), rte_mbuf_timestamp_t>, "oops! packet sent timestamp type needs to be adjusted");
+                    std::memcpy(&info.sent, sockperf::payload(payload, buffer->data_len - msg_header_size), sizeof(info.sent));
+                    info.received = timestamp ? device().timestamp_fix(*timestamp) : enqueued;
+                    info.enqueued_rx = enqueued;
+                    info.size = buffer->data_len;
                 }
                 break;
             }

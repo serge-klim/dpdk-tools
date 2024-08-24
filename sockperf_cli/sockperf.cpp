@@ -79,7 +79,7 @@ void run(boost::program_options::variables_map const& options) {
         BOOST_LOG_SEV(log::get(), boost::log::trivial::warning) << device_config.info.default_rxportconf.nb_queues << " rx queues are configured but only single rx queue is supported at the moment";
         device_config.info.default_rxportconf.nb_queues = 1;
     }
-    if (!options["multi-tx-queue"].as<bool>())
+    if ((device_config.info.default_txportconf.nb_queues = options["txq"].as<std::uint16_t>()) == 0)
         device_config.info.default_txportconf.nb_queues = 1;
 
     constexpr auto svc_queues = 0;
@@ -191,12 +191,9 @@ void run(boost::program_options::variables_map const& options) {
         mempool_cache_size = half;
     if (mempool_cache_size > RTE_MEMPOOL_CACHE_MAX_SIZE / 4)
         mempool_cache_size = RTE_MEMPOOL_CACHE_MAX_SIZE / 4;
-//    auto mempool_cache_size = 32;
-    //[[maybe_unused]] auto svc_mempool = dpdkx::scoped_mempool{ rte_pktmbuf_pool_create(dpdkx::svc_mempool_name(socket->socket_id).c_str(), 64 - 1, 24, 0, RTE_PKTMBUF_HEADROOM * 2 /*RTE_MBUF_DEFAULT_BUF_SIZE*/, socket->socket_id), &rte_mempool_free };
 
     BOOST_LOG_SEV(log::get(), boost::log::trivial::debug) << "creating sockperf packets memory pool : " << mempool_size * tx_jobs.size() << " cache_size : " << mempool_cache_size;
     mempool = std::shared_ptr{ dpdkx::make_scoped_mempool("sockperf", mempool_size * tx_jobs.size(), mempool_cache_size, 0, RTE_PKTMBUF_HEADROOM + payload_size, device_config.socket_id) };
-    //auto mempool = std::shared_ptr{ dpdkx::make_scoped_mempool("sockperf", 64 - 1, 24, 0, RTE_PKTMBUF_HEADROOM + payload_size /*RTE_MBUF_DEFAULT_BUF_SIZE*/, device_config.socket_id) };
     auto [pool_size, ol_flags] = configure_sockperf_packet_pool(device, mempool.get(), payload_size, std::make_pair(dest_addr.sin_addr.s_addr, mac_addr), static_cast<rte_be16_t>(dest_addr.sin_port), options["ttl"].as<std::uint8_t>());
     auto send_jobs = utils::workarounds::to<std::vector<tx_job>>(
         std::ranges::views::iota(dpdkx::queue_id_t{ 0 }, static_cast<dpdkx::queue_id_t>(tx_jobs.size()))
@@ -221,7 +218,7 @@ void run(boost::program_options::variables_map const& options) {
 
     if(latency_n_packets)
     {
-        BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "performing latency test...";
+        BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "performing latency test ...";
         auto j = latency_test_job{ *rx_channel, 0/*queue_ix*/, mempool, latency_n_packets, ol_flags, payload_size };
         if (socket_config->cores.back() == rte_get_main_lcore())
             dpdkx::run_single_job(&j);
@@ -262,13 +259,11 @@ void run(boost::program_options::variables_map const& options) {
     if (auto received_packets = rx_channel->packets_received()) {
         BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "processing collected data...";
         assert(received_packets == rx_channel->stats().requested_slots());
-        rx_channel->stats().process();
+        rx_channel->stats().process(options);
     }
     
     if (struct rte_eth_stats stats; rte_eth_stats_get(device.port_id(), &stats) >= 0)
         BOOST_LOG_SEV(log::get(), boost::log::trivial::debug) << std::forward_as_tuple(device, stats);
     else
         BOOST_LOG_SEV(log::get(), boost::log::trivial::error) << " rte_eth_stats_get failed : " << dpdkx::last_error().message();
-
-    //BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "...bye!";
 }
