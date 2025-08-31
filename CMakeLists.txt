@@ -1,4 +1,4 @@
-﻿cmake_minimum_required (VERSION 3.8)
+﻿cmake_minimum_required(VERSION 3.24)
 
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141)
@@ -6,15 +6,19 @@ if (POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
-project (dpdk-tools)
+project (dpdk-tools VERSION 0.0.3 )
 
 add_subdirectory (dpdkx)
 add_subdirectory (sockperf_cli)
 add_subdirectory (sockperf)
 
 
-add_subdirectory(${toolz_DIR}/utils ${CMAKE_CURRENT_BINARY_DIR}/utils)
-add_subdirectory(${toolz_DIR}/utils/program_options ${CMAKE_CURRENT_BINARY_DIR}/utils/program_options)
-add_subdirectory(${toolz_DIR}/utils/flags ${CMAKE_CURRENT_BINARY_DIR}/utils/flags)
-add_subdirectory(${toolz_DIR}/parsers ${CMAKE_CURRENT_BINARY_DIR}/parsers)
+include(FetchContent)
+FetchContent_Declare(
+  fb_utils
+  GIT_REPOSITORY https://github.com/serge-klim/fb_utils.git
+  GIT_TAG        7adf7f9b4522778456905b6f3d4ab0f15332a1fc
+)
+
+FetchContent_MakeAvailable(fb_utils)
 

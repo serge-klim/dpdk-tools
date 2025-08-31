@@ -5,6 +5,7 @@
 namespace dpdkx { 
 class device;
 struct job;
+class sink;
 inline namespace v0 { namespace config {
  struct config_log; // tag
 }}} // namespace dpdkx::v0::config 
@@ -29,7 +30,12 @@ struct traits<dpdkx::job, std::true_type> {
 };
 
 template<>
-struct traits<dpdkx::device, enable_debug_loggers> {
+struct traits<dpdkx::device> {
+    using type = rtexx::rte_logger_ex<enable_debug_loggers::value ? rtexx::log_level::debug : rtexx::log_level::warning>;
+};
+
+template<>
+struct traits<dpdkx::sink, enable_debug_loggers> {
     using type = rtexx::rte_logger;
 };
 

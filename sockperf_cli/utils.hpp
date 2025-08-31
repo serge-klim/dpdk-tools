@@ -1,6 +1,7 @@
 #pragma once
 #include "stats.hpp"
 #include "sockperf/x.hpp"
+#include "dpdkx/detail/atomic_shared_ptr.hpp"
 #include "dpdkx/jobs.hpp"
 #include "dpdkx/rx_channel.hpp"
 #include "dpdkx/mempool.hpp"
@@ -11,11 +12,16 @@
 class tx_job : public dpdkx::job {
 public:
     tx_job(dpdkx::device& device, dpdkx::queue_id_t queue_id, dpdkx::shared_mempool packet_pool, std::size_t packets2send, std::uint64_t ol_flags, std::size_t payload_size);
+    constexpr dpdkx::queue_id_t queue_id() const noexcept { return queue_id_; }
+    constexpr tx_timestamps const& timestamps() const noexcept { return timestamps_; } 
 	dpdkx::job_state process() override;
     std::error_code warmup(class sockperf_channel& channel, std::vector<dpdkx::job*>& jobs, std::chrono::milliseconds timeout = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds{ 25 }));
 private:
     dpdkx::device& device_;
     dpdkx::queue_id_t queue_id_;
+    std::uint16_t burst_size_;
+    std::vector<rte_mbuf*> buffers_;
+    tx_timestamps timestamps_;
     dpdkx::shared_mempool packet_pool_;
     std::size_t packets2send_ = 0;
     std::uint64_t ol_flags_ = 0;
@@ -24,7 +30,8 @@ private:
 
 class latency_test_job : public dpdkx::job {
 public:
-    latency_test_job(sockperf_channel& rx_channel, dpdkx::queue_id_t queue_id, dpdkx::shared_mempool packet_pool, std::size_t packets2send, std::uint64_t ol_flags, std::size_t payload_size);
+    latency_test_job(sockperf_channel& rx_channel, dpdkx::queue_id_t queue_id, dpdkx::shared_mempool packet_pool, 
+        std::size_t packets2send, std::uint64_t ol_flags, std::size_t payload_size, bool disable_clock);
     dpdkx::job_state process() override;
 private:
     sockperf_channel& rx_channel_;
@@ -33,6 +40,7 @@ private:
     std::size_t packets2send_ = 0;
     std::uint64_t ol_flags_ = 0;
     std::size_t payload_size_ = 0;
+    bool disable_clock_ = false;
 };
 
 struct message_info {
@@ -46,16 +54,16 @@ struct message_info {
 
 class sockperf_channel : public dpdkx::rx_channel {
 public:
-    sockperf_channel(use_make_rx_channel, dpdkx::device& device, sockaddr_in const& addr, std::size_t packets2send, bool detailed_stats = false);
+    sockperf_channel( dpdkx::device& device, sockaddr_in const& addr, std::size_t packets2send, bool detailed_stats = false);
     constexpr auto packets_received() const { return stats_.requested_slots(); }
     constexpr statistics& stats() noexcept { return stats_; }
     constexpr statistics const& stats() const noexcept { return stats_; }
-    auto last_warmup_message() const noexcept { return last_warmup_message_.load(); }
-    bool enqueue(dpdkx::queue_id_t queue_id, rte_ipv4_hdr* ipv4hdr, rte_mbuf* buffer) override;
+    auto last_warmup_message() const noexcept { return workaround::load(last_warmup_message_); }
+    std::uint16_t enqueue(dpdkx::queue_id_t queue_id, rte_mbuf** buffers, std::uint16_t n) override;
 private:
     std::size_t packets2send_ = 0;    
     statistics stats_;
-    std::atomic<std::shared_ptr<message_info>> last_warmup_message_;
+    workaround::atomic_shared_ptr<message_info> last_warmup_message_;
 };
 
 

@@ -6,6 +6,9 @@
 
 
 namespace dpdkx {
+
+static constexpr std::size_t max_pkt_burst = 256;
+    
 enum class job_state {
     busy,
     idling,
@@ -18,11 +21,13 @@ void stop_jobs() noexcept;
 struct job {
     //virtual bool resume() { return true; }
     [[nodiscard]] virtual job_state process() = 0;
+    virtual int run_exclusive() noexcept;
     //virtual bool idle(std::size_t n) { return true; };
     //virtual void process(struct rte_mbuf* buffers, std::size_t size) = 0;
 };
 
-int run_single_job(void* param) noexcept;
+inline int run_single_job(void* param) noexcept { return static_cast<job*>(param)->run_exclusive(); }
+
 [[nodiscard]] job_state run_jobs_once(std::vector<dpdkx::job*>& jobs);
 
 struct core_jobs {

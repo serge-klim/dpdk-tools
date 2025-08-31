@@ -47,3 +47,11 @@ accordingly (preferred way). The other way it to set offloads in info(rte_eth_de
 
 to confirm that parameter took effect - `-v` parameter can be used.
 
+
+if you run in working environment and your PMD supports it, restricting forwarding with something like this:
+```
+flow isolate 0 true
+flow create 0 priority 0 ingress pattern eth src is EC:0D:9A:98:B2:D2 / ipv4 / udp dst is 11111 / end actions queue index 0 / end
+flow create 0 priority 1 ingress pattern eth / end actions drop / end
+```
+propably would make sense.

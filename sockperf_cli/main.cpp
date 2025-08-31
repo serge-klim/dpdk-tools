@@ -1,9 +1,10 @@
+#include "sockperf/sockperf.hpp"
 #include "utils/program_options/validators/chrono.hpp"
 #include "utils/program_options/validators/net.hpp"
 #include "utils/program_options/log.hpp"
 //#include <boost/program_options.hpp>
 #include "loggers.hpp"
-#include <boost/format.hpp>
+#include <format>
 #include <list>
 #include <iostream>
 #include <fstream>
@@ -13,13 +14,15 @@
 
 boost::program_options::options_description common_options()
 {
+   auto constexpr min_payload_size = sockperf::header_size();
    auto description = boost::program_options::options_description{ "configuration" };
    // clang-format off
    description.add_options()
        ("destination,d", boost::program_options::value<net::endpoint>()->required(), "\tdestination endpoint")
        ("destination-mac,m", boost::program_options::value<std::string>(), "\tdestination mac address")
        ("ttl", boost::program_options::value<std::uint8_t>()->default_value(64), "\tttl")
-       ("packet-size,s", boost::program_options::value<std::size_t>()->default_value(32), "\tuse <size> as number of data bytes to be sent")
+       ("payload-size,s", boost::program_options::value<std::size_t>()->default_value(min_payload_size), std::format("\tnumber of data bytes to be sent (excluding packet headers), minimum payload size is {} bytes (sockperf header size)", min_payload_size).c_str())
+       ("cpu-cycles-latency,r", boost::program_options::value<bool>()->default_value(false)->implicit_value(true),"\tuse cpu-cycles instead of NIC clock, even if clock avalible")
        ("latency-test,l", boost::program_options::value<std::size_t>()->default_value(0)->implicit_value(default_latency_n_packets), "\tlatency (ping like) test [number of packets to send]")
        ("throughput-test,t", boost::program_options::value<std::size_t>()->default_value(0)->implicit_value(default_throughput_n_packets), "\tthroughput test (burst send)[number of packets requests to send]")
        ("no-warmup", boost::program_options::value<bool>()->default_value(false)->implicit_value(true), "\tskip warmup")
@@ -60,39 +63,23 @@ std::ostream& help(std::ostream& out, boost::program_options::options_descriptio
 
 bool parse_config(boost::program_options::options_description const& description,boost::program_options::variables_map& vm)
 {
-   auto res = false;
-   auto const& config_opt = vm["config"];
-   auto config_filename = config_opt.empty() ? std::make_pair(false, std::string{"config.ini"}) : std::make_pair(true, config_opt.as<std::string>());
-   if (auto ifs = std::ifstream{config_filename.second}) {
+   auto config = vm["config"];
+   auto config_filename = config.as<std::string>();
+   auto ifs = std::ifstream { config_filename };
+   if (!ifs) {
+      if (!config.defaulted())
+         throw std::runtime_error{std::format("can't open configuration file \"{}\"", config_filename)};
+      return false;
+   }
 
-      auto parsed = parse_config_file(ifs, description, true);
-      store(parsed, vm);
+   auto parsed = parse_config_file(ifs, description, true);
+   store(parsed, vm);
 
-      //auto const& additional = collect_unrecognized(parsed.options, boost::program_options::include_positional);
-      //init_log_from_unrecognized_program_options(additional);
-      if (!init_log_from_unrecognized_program_options(parsed, vm))
-          configure_default_logger(vm);
+   if (!init_log_from_unrecognized_program_options(parsed, vm))
+      configure_default_logger(vm);
 
-      //notify(vm); // check config file options sanity
-      res = true;
-   } else if (config_filename.first)
-      throw std::runtime_error{str(boost::format("can't open configuration file \"%1%\"") % config_filename.second)};
-   return res;
+   return true;
 }
-
-//#pragma message ("TODO: move to utility!!!!!!!!!!!!")
-//void add_unrecognized_program_options(boost::program_options::basic_parsed_options<char> const& parsed_options, boost::program_options::variables_map& options_map) {
-//    for (auto const& option : parsed_options.options) {
-//        if (option.unregistered /* ||
-//             (mode == include_positional && options[i].position_key != -1)
-//             */
-//            ) {
-//            if (option.original_tokens.size() == 2)
-//                options_map.emplace(option.original_tokens[0], boost::program_options::variable_value{ boost::any{option.original_tokens[1]}, false });
-//        }
-//    }
-//}
-
 
 int main(int argc, char* argv[])
 {
@@ -101,7 +88,7 @@ int main(int argc, char* argv[])
       // clang-format off
         description.add_options()
             ("help,h", "\tprint usage message")
-            ("config,c", boost::program_options::value<std::string>(), "\tconfiguration file")
+            ("config,c", boost::program_options::value<std::string>()->default_value("config.ini"), "\tconfiguration file")
             ;
       // clang-format on
 

@@ -46,7 +46,7 @@ void log(int logtype, log_level level, Format&& fmt,  Args&& ...args) {
 	static thread_local auto buffer = [] {
 		auto res = std::vector<char>{};
 		res.reserve(512);
-		return res;
+		return std::move(res);
 		}();
 	buffer.clear();
 	try {
@@ -58,42 +58,56 @@ void log(int logtype, log_level level, Format&& fmt,  Args&& ...args) {
 	//buffer.push_back('\0');
 	//rte_log(static_cast<std::uint32_t>(level), logtype, buffer.data());
 	fwrite(buffer.data(), sizeof(char), buffer.size(), out);
-    if(static_cast<std::uint32_t>(level) <= static_cast<std::uint32_t>(log_level::warning))
+    //if(static_cast<std::uint32_t>(level) <= static_cast<std::uint32_t>(log_level::warning))
         fflush(out); 
 }
 
-class rte_logger
+namespace detail{
+int register_log_type_and_pick_level(const char* name, std::uint32_t loglevel);
+} // namespace detail
+
+template<log_level MaxLogLevel = log_level::debug>
+class rte_logger_ex
 {
 public:
-	constexpr rte_logger(int logtype) noexcept : logtype_{ logtype } {}
-	explicit rte_logger(char const* name, std::uint32_t loglevel = RTE_LOG_INFO);
-	explicit rte_logger(std::string const& name, std::uint32_t loglevel = RTE_LOG_INFO) : rte_logger{name.c_str(), loglevel} {}
+	constexpr rte_logger_ex(int logtype) noexcept : logtype_{ logtype } {}
+	explicit rte_logger_ex(char const* name, std::uint32_t loglevel = RTE_LOG_INFO) :rte_logger_ex{ detail::register_log_type_and_pick_level(name, loglevel) } {}
+	explicit rte_logger_ex(std::string const& name, std::uint32_t loglevel = RTE_LOG_INFO) : rte_logger_ex{name.c_str(), loglevel} {}
 
 	template<typename ...Args>
 	void log(log_level level, Args&& ...args) { rtexx::log(logtype_, level, std::forward<Args>(args)...); }
+	template<log_level LogLevel, typename ...Args>
+	void log(Args&& ...args) { 
+		if constexpr (LogLevel <= MaxLogLevel)
+			rtexx::log(logtype_, LogLevel, std::forward<Args>(args)...); }
+
 	template <typename... Args>
-	 void trace(Args&&...args)  { log(log_level::debug, std::forward<Args>(args)...); }
+	 void trace(Args&&...args)  { log<log_level::debug>(std::forward<Args>(args)...); }
 	template <typename... Args>
-	 void debug(Args&&...args)  { log(log_level::debug, std::forward<Args>(args)...); }
+	 void debug(Args&&...args)  { log<log_level::debug>(std::forward<Args>(args)...); }
 	template <typename... Args>
-	void info(Args&&...args)  { log(log_level::info, std::forward<Args>(args)...); }
+	void info(Args&&...args)  { log<log_level::info>(std::forward<Args>(args)...); }
 	template <typename... Args>
-	 void warn(Args&&...args)  { log(log_level::warning, std::forward<Args>(args)...); }
+	 void warn(Args&&...args)  { log<log_level::warning>(std::forward<Args>(args)...); }
 	template <typename... Args>
-	 void error(Args&&...args)  { log(log_level::error, std::forward<Args>(args)...); }
+	 void error(Args&&...args)  { log<log_level::error>(std::forward<Args>(args)...); }
 	template <typename... Args>
-	 void critical(Args&&...args)  { log(log_level::critical, std::forward<Args>(args)...); }
+	 void critical(Args&&...args)  { log<log_level::critical>(std::forward<Args>(args)...); }
 
 
 	template <typename... Args>
-	 void alert(Args&&...args)  { log(log_level::alert, std::forward<Args>(args)...); }
+	void alert(Args&&...args) { log<log_level::alert>(std::forward<Args>(args)...); }
 	template <typename... Args>
-	 void emergency(Args&&...args)  { log(log_level::emergancy, std::forward<Args>(args)...); }
+	void emergency(Args&&...args) { log<log_level::emergancy>(std::forward<Args>(args)...); }
 private:
 	int logtype_;
 };
 
+using rte_logger = rte_logger_ex<>;
+
 } // namespace rtex
+
+
 
 namespace logging {
 
@@ -133,7 +147,6 @@ using logger_t = typename traits<T>::type;
 
 template<typename T>
 std::string logger_name() { return boost::typeindex::type_id<T>().pretty_name(); }
-
 
 template<typename T>
 logger_t<T>& logger() {
