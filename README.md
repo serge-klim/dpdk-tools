@@ -55,3 +55,6 @@ flow create 0 priority 0 ingress pattern eth src is EC:0D:9A:98:B2:D2 / ipv4 / u
 flow create 0 priority 1 ingress pattern eth / end actions drop / end
 ```
 propably would make sense.
+
+
+some latency tests results with configurations avalible [here](https://github.com/serge-klim/nics-bm)
