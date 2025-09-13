@@ -197,12 +197,14 @@ namespace dpdkx { inline namespace v0 { namespace config {
 
  BOOST_DESCRIBE_STRUCT(device, (),
 	 (
-		 info,
-		 effective_offload,
 		 svc_tx_n,
+         rx_flow_queues,
 		 next_src_port,
 		 rx_reconfig_hint,
-         clock_hz,
+         clock_hz,        
+		 info,
+		 effective_offload,
+         tx_rings,
 		 rx_meta_features,
 	     features
 	 )

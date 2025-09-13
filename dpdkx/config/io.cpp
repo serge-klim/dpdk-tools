@@ -17,6 +17,7 @@ thread_local auto prefix = std::char_traits<char>::length(prefixes);
 template<typename T>
 auto operator << (std::ostream& out, T const& val) -> std::enable_if_t<boost::describe::has_describe_members<T>::value, std::ostream&> {
     if (prefix !=0 ) {
+        auto flags = out.flags();
         out << '{';
         --prefix;
         boost::mp11::mp_for_each<boost::describe::describe_members<T, boost::describe::mod_public>>([&out, &val](auto member) {
@@ -31,6 +32,7 @@ auto operator << (std::ostream& out, T const& val) -> std::enable_if_t<boost::de
             else
                 out << static_cast<typename io::io_type<decltype(member)::pointer>::type>(val.*member.pointer);
             });
+        out.flags(flags);
         ++prefix;
         out << '\n' << prefixes + prefix << '}';
     } else

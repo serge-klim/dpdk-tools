@@ -1,4 +1,4 @@
-﻿find_package(Boost COMPONENTS program_options unit_test_framework REQUIRED )
+﻿find_package(Boost REQUIRED COMPONENTS program_options unit_test_framework CONFIG)
 find_package(PkgConfig REQUIRED)
 find_package(fmt)
 pkg_check_modules(LIBDPDK REQUIRED 
@@ -13,48 +13,63 @@ target_link_libraries(libdpdk_staic INTERFACE ${LIBDPDK_STATIC_LDFLAGS})
 add_library (dpdkx
               error.cpp
               log.cpp
-              loggers.hpp
               loggers.cpp
               config/program_options.cpp
               config/socket.cpp
-              config/io.hpp
               config/io.cpp
               udptx_channel.cpp
               rx_channel.cpp
               device.cpp
-              jobs.hpp
               jobs.cpp
               mcast.cpp
               mbuf.cpp
-              mempool.hpp
               mempool.cpp
-              detail/tx_queue.cpp
-              detail/tx_queue.hpp
+              sink.cpp
+              detail/tx_ring.cpp
               detail/utils.cpp
-              detail/utils.hpp
               utils.cpp
-              io.hpp
               io.cpp
+              flow/error.cpp
+              flow/flow.cpp
+              flow/rx_queue.cpp
 			)
+
+#target_compile_definitions(dpdkx PRIVATE WIN32_LEAN_AND_MEAN)
 
 #set_source_files_properties(device.cpp PROPERTIES COMPILE_FLAGS /Qpar COMPILE_FLAGS /Qpar-report:2 COMPILE_FLAGS -Rpass-missed=loop-vectorize)
 
-add_library (mx-c::dpdkx ALIAS dpdkx)
+add_library (fb::dpdkx ALIAS dpdkx)
 
 target_sources(dpdkx PUBLIC FILE_SET HEADERS
 				FILES
                 error.hpp
+                loggers.hpp
                 log.hpp
                 utils.hpp
+                memory.hpp
+                mempool.hpp
+                jobs.hpp
                 udptx_channel.hpp
                 rx_channel.hpp
                 device.hpp
                 mbuf.hpp
+                sink.hpp
+                io.hpp
+                config/io.hpp
                 config/device.hpp
                 config/socket.hpp
                 config/program_options.hpp
                 proto/igmp.hpp
                 netinet_in.hpp
+                detail/proxy/mem_fn.hpp
+                detail/atomic_shared_ptr.hpp
+                detail/dpdk_type.hpp
+                detail/tx_ring.hpp
+                detail/utils.hpp
+                detail/numerics.hpp
+                flow/error.hpp
+                flow/flow.hpp
+                flow/rx_queue.hpp
 			   )
 
 
@@ -67,9 +82,9 @@ target_include_directories(dpdkx INTERFACE
 target_link_libraries(dpdkx
                 PUBLIC
                 libdpdk_staic
-                utils::parsers
-                utils::flags
-                utils::program_options
+                #fb::fb_utils::parsers
+                fb::fb_utils::flags
+                fb::fb_utils::program_options
                 Boost::boost
                 $<$<BOOL:${fmt_FOUND}>:fmt::fmt>
 				PRIVATE 
@@ -86,11 +101,12 @@ set_property(TARGET dpdkx PROPERTY CXX_STANDARD 23)
 
 add_executable (dpdkx_test
         test.cpp
+        numerics_test.cpp
         )
 
 target_link_libraries(dpdkx_test
 		PRIVATE
-        mx-c::dpdkx        
+        fb::dpdkx
 		Boost::unit_test_framework
         Boost::disable_autolinking
 #        Boost::dynamic_linking

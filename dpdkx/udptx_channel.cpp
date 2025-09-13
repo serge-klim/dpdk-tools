@@ -130,7 +130,7 @@ bool dpdkx::updtx_channel::send(std::tuple<rte_ether_addr, rte_be32_t, rte_be16_
     head->ol_flags = ol_flags;
     assert((rte_mbuf_sanity_check(head, 1),true));
 
-    auto res = device_.raw_tx().enque(head);
+    auto res = device_.tx_ring().enque(head);
     if(!res)
         rte_pktmbuf_free(head);
     return res;

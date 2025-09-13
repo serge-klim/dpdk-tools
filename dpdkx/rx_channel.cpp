@@ -7,13 +7,17 @@
 #include <cstdint>
 #include <cassert>
 
-dpdkx::endpoint dpdkx::make_endpoint(sockaddr_in const& addr) {
+dpdkx::ip4_endpoint dpdkx::make_endpoint(sockaddr_in const& addr) {
 	if (addr.sin_family != AF_INET)
 		throw std::system_error{ make_error_code(std::errc::address_family_not_supported) , "can't attach rx channel" };
 	return { addr.sin_addr.s_addr, addr.sin_port };
 }
 
-dpdkx::rx_channel::rx_channel(use_make_rx_channel, dpdkx::device& dev, sockaddr_in const& ip_addr)
+std::error_code dpdkx::attach(device& dev,ip4_endpoint ep, std::shared_ptr<rx_channel> channel) {
+   return dev.attach_rx(std::move(ep), std::move(channel));
+}
+
+dpdkx::rx_channel::rx_channel(dpdkx::device& dev, sockaddr_in const& ip_addr)
 	: dev_{dev} {
 	assert(ip_addr.sin_family == AF_INET && "only ip4 supported at the moment");
 	//if (ip_addr.sin_family != AF_INET)
@@ -23,22 +27,18 @@ dpdkx::rx_channel::rx_channel(use_make_rx_channel, dpdkx::device& dev, sockaddr_
 	//	throw std::system_error{ error , "can't attach rx channel" };
 }
 
-std::error_code dpdkx::rx_channel::join(endpoint ep) {
-	return dev_.attach_rx(std::move(ep), shared_from_this());
-}
-
-
-bool dpdkx::rx_channel::enqueue(queue_id_t /*queue_id*/, rte_ipv4_hdr* ipv4hdr, rte_mbuf* buffer) {
-	assert(ipv4hdr != nullptr);
-	[[maybe_unused]] sockaddr_in from;
-	from.sin_family = AF_INET;
-	from.sin_addr.s_addr = ipv4hdr->dst_addr;
-	auto udphdr = rte_pktmbuf_mtod_offset(buffer, rte_udp_hdr*, buffer->l2_len + buffer->l3_len);
-	from.sin_port = udphdr->dst_port;
-	[[maybe_unused]] auto const hdr_size = sizeof(*udphdr);
-	//auto data = rte_pktmbuf_mtod_offset(buffer, char const*, buffer->l2_len + buffer->l3_len + hdr_size);
-	assert(rte_be_to_cpu_16(udphdr->dgram_len) > hdr_size);
-	//auto payload_size = rte_be_to_cpu_16(udphdr->dgram_len) - hdr_size;
-	return false;
+std::uint16_t dpdkx::rx_channel::enqueue(queue_id_t /*queue_id*/, rte_mbuf** buffers, std::uint16_t n) {
+	for (auto i = decltype(n){0}; i != n; ++i) {
+		auto ipv4hdr = rte_pktmbuf_mtod_offset(buffers[i], rte_ipv4_hdr*, buffers[i]->l2_len);
+        assert(ipv4hdr != nullptr);
+        [[maybe_unused]] sockaddr_in from;
+        from.sin_family = AF_INET;
+        from.sin_addr.s_addr = ipv4hdr->dst_addr;
+		auto udphdr = rte_pktmbuf_mtod_offset(buffers[i], rte_udp_hdr*, buffers[i]->l2_len + buffers[i]->l3_len);
+        from.sin_port = udphdr->dst_port;
+        [[maybe_unused]] auto const hdr_size = sizeof(*udphdr);
+        assert(rte_be_to_cpu_16(udphdr->dgram_len) > hdr_size);
+	}
+	return n;
 }
 

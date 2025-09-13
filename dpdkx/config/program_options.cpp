@@ -5,7 +5,6 @@
 #include "loggers.hpp"
 #include "error.hpp"
 #include "rte_ethdev.h"
-#include "parsers/parser.hpp"
 #include <boost/spirit/home/x3.hpp>
 #include <boost/fusion/adapted/struct/detail/extension.hpp>
 #include <boost/fusion/include/is_sequence.hpp>
@@ -15,6 +14,7 @@
 #include <boost/mp11/algorithm.hpp>
 //#include <boost/pfr.hpp>
 //#include <boost/pfr/core_name.hpp>
+#include <iomanip>
 #include <string_view>
 #include <ranges>
 #include <type_traits>
@@ -185,7 +185,7 @@ std::vector<dpdkx::v0::config::device> dpdkx::v0::config::devices_configuration(
         dev.port_id = port_id;
         dev.socket_id = static_cast<unsigned int>(rte_eth_dev_socket_id(port_id));
         if (rte_eth_macaddr_get(port_id, &dev.mac_addr) != 0)
-            throw std::system_error{ dpdkx::last_error() , "rte_eth_dev_info_get failed" };
+            throw std::system_error{ dpdkx::last_error() , "rte_eth_macaddr_get failed" };
 
         auto end = cend(nics_info);
         auto info = std::find_if(cbegin(nics_info), end, [&dev](auto const& info) {

@@ -3,13 +3,18 @@
 #include "proto/igmp.hpp"
 #include "config/device.hpp"
 #include "mempool.hpp"
+#include "flow/rx_queue.hpp"
+#include "detail/atomic_shared_ptr.hpp"
+#include "detail/dpdk_type.hpp"
+#include "detail/numerics.hpp"
 #include "rx_channel.hpp"
 #include "rte_memory.h"
 #include "rte_byteorder.h"
+#include "rte_mbuf.h"
 //#include "rte_lpm.h"
 #include "rte_ring.h"
 #include "rte_ether.h"
-#include "detail/tx_queue.hpp"
+#include "detail/tx_ring.hpp"
 #include <boost/functional/hash.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
 
@@ -17,9 +22,7 @@
 #include <array>
 #include <vector>
 #include <memory>
-#include <cstdint>
 #include <tuple>
-#include <atomic>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -31,13 +34,12 @@
 //#include <boost/unordered/concurrent_flat_map.hpp>
 
 struct rte_ring;
-struct rte_mbuf;
 
 namespace dpdkx {
 
 struct endpoint_hasher
 {
-    std::size_t operator()(endpoint const& ep) const noexcept
+    std::size_t operator()(ip4_endpoint const& ep) const noexcept
     {
         auto res = std::size_t{ 0 };
         boost::hash_combine(res, std::hash<decltype(ep.first)>{}(ep.first));
@@ -51,22 +53,20 @@ using unique_ring = std::unique_ptr<rte_ring, decltype(&rte_ring_free)>;
 //    virtual bool process(struct rte_mbuf* buffer) = 0;
 //};
 
-using sinks_t = std::vector<std::pair<endpoint, std::shared_ptr<rx_channel>/*unique_ring*/>>;
-constexpr std::size_t max_pkt_burst = 512;
+using sinks_t = std::vector<std::pair<ip4_endpoint, std::shared_ptr<rx_channel>/*unique_ring*/>>;
 class device
 {
     class tx_job : public job {
     public:
         tx_job(device& device, queue_id_t queue_id, std::uint16_t burts_size);
         job_state process() override;
-        [[nodiscard]] constexpr tx_queue& raw_tx() noexcept { return queue_; }
+        [[nodiscard]] constexpr dpdkx::tx_ring& tx_ring() noexcept { return queue_; }
     private:
         dpdkx::device& device_;
-        port_id_t port_id_;
         queue_id_t queue_id_;
         std::uint16_t n_ = 0;
         std::uint16_t burst_size_ = 0;
-        tx_queue queue_;
+        dpdkx::tx_ring queue_;
         std::array<rte_mbuf*, max_pkt_burst> buffers_;
     };
 
@@ -77,7 +77,7 @@ class device
     private:
         inline auto try_reload_sinks() noexcept {
             auto res = false;
-            if (checkpoint_ >= reload_checkpoint_) {
+            if( unlikely (checkpoint_ >= reload_checkpoint_)) {
                 while (sinks_ != device_.sinks()) {
                     sinks_ = device_.sinks();
                     res = true;
@@ -88,7 +88,6 @@ class device
         }
     private:
         device& device_;
-        port_id_t port_id_;
         queue_id_t queue_id_;
 
         std::uint16_t last_ = 0;
@@ -96,7 +95,7 @@ class device
 #pragma message("TODO:configure it based on burst_size")
         std::uint16_t reload_checkpoint_ = 1001;
         std::uint16_t burst_size_ = 0;
-        std::array<rte_mbuf*, max_pkt_burst> buffers_;
+        std::array<rte_mbuf*, max_pkt_burst*2> buffers_;
         std::shared_ptr<sinks_t> sinks_;
     };
 public:
@@ -116,25 +115,19 @@ public:
     constexpr bool clock_enabled() const noexcept { return config_.features[config::device::dev_clock];}
     rte_mbuf_timestamp_t read_clock() const noexcept;
     constexpr std::uint64_t clock_hz() const noexcept { return config_.clock_hz; }
-    constexpr rte_mbuf_timestamp_t timestamp_fix(rte_mbuf_timestamp_t timestamp) const noexcept { return timestamp * NS_PER_S / clock_hz(); }
-    //constexpr rte_mbuf_timestamp_t timestamp_fix(rte_mbuf_timestamp_t timestamp) const noexcept { 
-    //    if (std::get<bool>(clock_adjustment_))
-    //        timestamp = rte_bswap64(timestamp);
-    //    return static_cast<rte_mbuf_timestamp_t>(timestamp * std::get<double>(clock_adjustment_)); 
-    //}
-    std::optional<rte_eth_link> link_status() const noexcept;
-    std::optional<rte_eth_link> link_status(std::chrono::milliseconds timeout) const;
+    constexpr rte_mbuf_timestamp_t timestamp_fix(rte_mbuf_timestamp_t timestamp) const noexcept { return mul_div(timestamp, NS_PER_S, clock_hz()) /*timestamp * NS_PER_S / clock_hz()*/; }
+    int link_status(rte_eth_link& status, std::chrono::milliseconds timeout) const noexcept;
     template<typename Rep, typename Period>
-    std::optional<rte_eth_link> link_status(std::chrono::duration<Rep, Period> timeout) const { return link_status(std::chrono::duration_cast<std::chrono::milliseconds>(timeout));}
+    int link_status(rte_eth_link& status, std::chrono::duration<Rep, Period> timeout) const noexcept { return link_status(status, std::chrono::duration_cast<std::chrono::milliseconds>(timeout));}
    
     std::error_code ether_address(rte_be32_t ip4addr, rte_ether_addr& mac_addr) noexcept;
 
-    [[nodiscard]] std::shared_ptr<sinks_t> sinks() const noexcept  { return sinks_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::shared_ptr<sinks_t> sinks() const noexcept { return workaround::load(sinks_,std::memory_order_relaxed); }
     [[nodiscard]] std::uint16_t next_src_port() noexcept;
 //TODO: most likely should be replaced with raw_tx_channel() -> interface;
-    [[nodiscard]] tx_queue& raw_tx(queue_id_t hint = 0) noexcept;
-    [[nodiscard]] dpdkx::tx_queue& service_tx(queue_id_t hint = 0) noexcept;
-    [[nodiscard]] std::uint16_t process_rx_packets(queue_id_t queue_id, struct rte_mbuf** buffers, std::uint16_t n);
+    [[deprecated]][[nodiscard]] dpdkx::tx_ring& tx_ring(queue_id_t hint = 0) noexcept;
+    [[deprecated]][[nodiscard]] dpdkx::tx_ring& service_tx(queue_id_t hint = 0) noexcept;
+    [[nodiscard]] std::uint16_t process_rx_packets(queue_id_t queue_id, rte_mbuf** buffers, std::uint16_t n);
 ///////////
     //device(device const&) = delete;
     //device& operator=(device const&) = delete;
@@ -143,22 +136,29 @@ public:
     [[nodiscard]] std::vector<job*> rx_jobs();
     [[nodiscard]] std::vector<job*> tx_jobs();
     [[nodiscard]] std::vector<job*> jobs();
-    int start() noexcept;
+    int start() /*noexcept*/;
     int stop() noexcept;
-    std::error_code attach_rx(endpoint ep, std::shared_ptr<rx_channel> ch);
-    std::error_code detach_rx(endpoint ep, std::shared_ptr<rx_channel> ch);
+    enum class attach_mode {
+        any,
+        rss,
+        flow
+    };
+    std::error_code attach_rx(ip4_endpoint ep, std::shared_ptr<rx_channel> ch, attach_mode mode = attach_mode::any);
+    std::error_code detach_rx(ip4_endpoint ep, std::shared_ptr<rx_channel> ch);
     std::error_code detach_rx(std::shared_ptr<rx_channel> ch);
 
     std::error_code join_mcast_group(rte_be32_t ip4addr) { return mcast_group(ip4addr, igm_record::change_to_exclude_mode); }
     std::error_code leave_mcast_group(rte_be32_t ip4addr) { return mcast_group(ip4addr, igm_record::change_to_include_mode); }
-    constexpr auto has_timestamp(struct rte_mbuf const* mbuf) const noexcept { return (mbuf->ol_flags & dynfields_.timestamp.flag) != 0; }
-    [[nodiscard]] rte_mbuf_timestamp_t* buffer_timestamp(struct rte_mbuf const* mbuf) const noexcept
+    constexpr bool has_timestamp(rte_mbuf const* mbuf) const noexcept { return (mbuf->ol_flags & dynfields_.timestamp.flag) != 0; }
+    [[nodiscard]] rte_mbuf_timestamp_t* buffer_timestamp(rte_mbuf const* mbuf) const noexcept
     {
         return has_timestamp(mbuf)
                 ? RTE_MBUF_DYNFIELD(mbuf, dynfields_.timestamp.offset, rte_mbuf_timestamp_t*)
                 : nullptr;
     }
-
+    static constexpr queue_id_t no_txq = (std::numeric_limits<queue_id_t>::max)();
+    [[nodiscard]] dpdkx::queue_id_t tx_queue(core_t core_id) noexcept;
+    [[nodiscard]] queue_id_t tx_queue() noexcept { return tx_queue(rte_lcore_id()); }
 private:
     std::error_code mcast_group(rte_be32_t ip4addr, igm_record::igmp_type type);
 
@@ -178,6 +178,7 @@ private:
     } dynfields_;
     std::vector<rx_job> rx_jobs_;
     std::vector<tx_job> tx_jobs_;
+    std::vector<flow::rx_queue> fqueues_;
     config::device config_;
     bool clock_bswap_ = false;
 //TODO:wrap in mcast tracker:
@@ -189,9 +190,10 @@ private:
     };
     boost::concurrent_flat_map<rte_be32_t, arp4rec> arp4_;
 /////////////////
-    std::atomic<std::shared_ptr<sinks_t>> sinks_;
-    //std::atomic<std::shared_ptr<rte_lpm>> sinks_;
+    workaround::atomic_shared_ptr<sinks_t> sinks_;
     std::atomic<std::uint16_t> next_src_port_;
+    std::uint16_t tx_queues_ = 0;
+    std::array<queue_id_t, RTE_MAX_LCORE> per_core_queue_ = { 0 };
 };
 
 [[nodiscard]] std::string svc_mempool_name(unsigned int socket_id);
@@ -200,6 +202,9 @@ inline rte_mbuf_timestamp_t timestamp(device const& device, struct rte_mbuf cons
     auto res = device.buffer_timestamp(mbuf);
     return res ? device.timestamp_fix(*res) : device.read_clock();
 }
+
+static_assert(!std::is_copy_constructible_v<device>, "device copy constructor should be disabled");
+static_assert(!std::is_copy_assignable_v<device>, "device shouldn't be copy assignable ");
 
 } // namespace dpdkx
 

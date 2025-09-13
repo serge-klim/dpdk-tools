@@ -15,7 +15,7 @@ dpdkx::v0::config::sockets dpdkx::v0::config::socket_configuration() {
     std::vector<core_config> sockets;
     auto res = dpdkx::v0::config::sockets{};
 
-    auto lcore_id = std::uint32_t{};
+    auto lcore_id = core_t{};
     RTE_LCORE_FOREACH/*RTE_LCORE_FOREACH_WORKER*/(lcore_id) {
         auto socket_id = rte_lcore_to_socket_id(lcore_id);
 
@@ -39,13 +39,13 @@ dpdkx::v0::config::sockets dpdkx::v0::config::socket_configuration() {
     auto main_core = rte_get_main_lcore();
     auto main_core_socket_id = rte_lcore_to_socket_id(main_core);
 
-    auto offset = std::size_t{ 0 };
+    auto offset = std::ptrdiff_t{ 0 };
     auto const n = sockets.size();
     res.sockets.reserve(n);
     for (auto ix = decltype(n){0}; ix != n; ++ix) {
         if (sockets[ix].socket_id == main_core_socket_id) { // moving main core to last position in socket group
             auto i = std::next(begin(res.cores), offset);
-            auto end_socket = std::next(i, sockets[ix].cores_n - 1); //if it last already we are done
+            auto end_socket = std::next(i, static_cast<std::ptrdiff_t>(sockets[ix].cores_n - 1)); //if it last already we are done
             i = std::find(i, end_socket, main_core);
             if (i != end_socket)
                 std::swap(*i, *end_socket);

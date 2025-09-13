@@ -128,15 +128,15 @@ void run(boost::program_options::variables_map const& options) {
         throw std::system_error{ dpdkx::last_error() , "unable to start device : " + device.id() };
 
     // wait_for_link(device)
-    auto link = device.link_status(/*timeout*/  std::chrono::seconds{ 9 });
-    if (!link)
+    rte_eth_link link;
+    if (device.link_status(link, std::chrono::seconds{ 3 }) !=0 )
         throw std::system_error{ dpdkx::last_error() , "unable to get device : " + device.id() + " link status" };
-    if (link->link_status == RTE_ETH_LINK_DOWN) 
-        throw std::runtime_error{ device.id() + " [" + std::to_string(device.port_id()) + "] is down" };
+    if (link.link_status == RTE_ETH_LINK_DOWN) 
+        BOOST_LOG_SEV(log::get(), boost::log::trivial::warning) << device.id() << " [" << device.port_id() << "] is down" ;
 
     struct in_addr out_addr;
     out_addr.s_addr = device.ip4addr();
-    BOOST_LOG_SEV(log::get(), boost::log::trivial::debug) << "port " << device.port_id() << " : " << inet_ntoa(out_addr) << " - link speed " << rte_eth_link_speed_to_str(link->link_speed);
+    BOOST_LOG_SEV(log::get(), boost::log::trivial::debug) << "port " << device.port_id() << " : " << inet_ntoa(out_addr) << " - link speed " << rte_eth_link_speed_to_str(link.link_speed);
 
     auto throughput_n_packets = options["throughput-test"].as<std::size_t>();
     auto latency_n_packets = options["latency-test"].as<std::size_t>();
@@ -144,9 +144,17 @@ void run(boost::program_options::variables_map const& options) {
         latency_n_packets = default_latency_n_packets;
         throughput_n_packets = default_throughput_n_packets;
     }
-    auto payload_size = options["packet-size"].as<std::size_t>();
-    if (constexpr auto timestamps_size = sizeof(sockperf::x::timestamps); timestamps_size > payload_size)
-        payload_size = timestamps_size;
+    auto payload_size = options["payload-size"].as<std::size_t>();
+    if(payload_size < sockperf::header_size()) {
+        BOOST_LOG_SEV(log::get(), boost::log::trivial::warning) << "specified payload size " << payload_size <<" is too small, has to be at least sockperf header size " << sockperf::header_size() << " bytes!";
+        payload_size  = sockperf::header_size();
+    }
+    auto const tx_burst_size = device.dev_info().default_txportconf.burst_size;    
+    if(throughput_n_packets != 0 && throughput_n_packets < tx_burst_size) {
+        BOOST_LOG_SEV(log::get(), boost::log::trivial::warning) << "number of packet for throughput test set to " << throughput_n_packets << ". It is less then configured NIC tx burst size "
+                                                                << tx_burst_size << ", resetting to " << tx_burst_size << " ..."; 
+        throughput_n_packets = tx_burst_size;
+    }                   
 
     dpdkx::job_sentry job_sentry;
     
@@ -184,16 +192,17 @@ void run(boost::program_options::variables_map const& options) {
     rte_ether_format_addr(mac.data(), mac.size(), &mac_addr);
     BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << inet_ntoa(dest_addr.sin_addr) << " : " << mac.data();
     auto mempool_size_opt = options["tx-mempool-size"];
-    assert(device.dev_info().default_txportconf.burst_size != 0);
+    assert(tx_burst_size != 0);
     auto const mempool_size = mempool_size_opt.empty() ? static_cast<unsigned>(256 - 1) : mempool_size_opt.as<unsigned>() ;
-    auto mempool_cache_size = device.dev_info().default_txportconf.burst_size * 16;
+    auto mempool_cache_size = tx_burst_size * 16;
     if (auto half = (mempool_size + 1) / 2 ; mempool_cache_size > half)
         mempool_cache_size = half;
     if (mempool_cache_size > RTE_MEMPOOL_CACHE_MAX_SIZE / 4)
         mempool_cache_size = RTE_MEMPOOL_CACHE_MAX_SIZE / 4;
 
     BOOST_LOG_SEV(log::get(), boost::log::trivial::debug) << "creating sockperf packets memory pool : " << mempool_size * tx_jobs.size() << " cache_size : " << mempool_cache_size;
-    mempool = std::shared_ptr{ dpdkx::make_scoped_mempool("sockperf", mempool_size * tx_jobs.size(), mempool_cache_size, 0, RTE_PKTMBUF_HEADROOM + payload_size, device_config.socket_id) };
+    /*auto*/ mempool = std::shared_ptr{ dpdkx::make_scoped_mempool("sockperf", mempool_size * tx_jobs.size(), mempool_cache_size, 0, RTE_PKTMBUF_HEADROOM + payload_size, device_config.socket_id) };
+    //auto mempool = std::shared_ptr{ dpdkx::make_scoped_mempool("sockperf", 64 - 1, 24, 0, RTE_PKTMBUF_HEADROOM + payload_size /*RTE_MBUF_DEFAULT_BUF_SIZE*/, device_config.socket_id) };
     auto [pool_size, ol_flags] = configure_sockperf_packet_pool(device, mempool.get(), payload_size, std::make_pair(dest_addr.sin_addr.s_addr, mac_addr), static_cast<rte_be16_t>(dest_addr.sin_port), options["ttl"].as<std::uint8_t>());
     auto send_jobs = utils::workarounds::to<std::vector<tx_job>>(
         std::ranges::views::iota(dpdkx::queue_id_t{ 0 }, static_cast<dpdkx::queue_id_t>(tx_jobs.size()))
@@ -219,7 +228,11 @@ void run(boost::program_options::variables_map const& options) {
     if(latency_n_packets)
     {
         BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "performing latency test ...";
-        auto j = latency_test_job{ *rx_channel, 0/*queue_ix*/, mempool, latency_n_packets, ol_flags, payload_size };
+        if(auto rx_burst_size = device.dev_info().default_rxportconf.burst_size;tx_burst_size != 1 || tx_burst_size != 1 ) {
+            BOOST_LOG_SEV(log::get(), boost::log::trivial::warning) << "NIC burst sizes configured to " << rx_burst_size <<"-rx/" << tx_burst_size <<"-tx. Which might be suboptimal for latency test,\nplease refer to https://doc.dpdk.org/guides/prog_guide/writing_efficient_code.html#lower-packet-latency for details..."; 
+        }
+        
+        auto j = latency_test_job{*rx_channel, 0 /*queue_ix*/, mempool, latency_n_packets, ol_flags, payload_size, options["cpu-cycles-latency"].as<bool>()};
         if (socket_config->cores.back() == rte_get_main_lcore())
             dpdkx::run_single_job(&j);
         else {
@@ -259,7 +272,20 @@ void run(boost::program_options::variables_map const& options) {
     if (auto received_packets = rx_channel->packets_received()) {
         BOOST_LOG_SEV(log::get(), boost::log::trivial::info) << "processing collected data...";
         assert(received_packets == rx_channel->stats().requested_slots());
-        rx_channel->stats().process(options);
+        assert(std::ranges::is_sorted(send_jobs, [](auto const& l, auto const& r) { return l.queue_id() < r.queue_id(); }));
+        auto timestamps = utils::workarounds::to<std::vector<std::pair<dpdkx::queue_id_t, std::span<tx_timestamps::value_type const>>>>(
+            send_jobs | std::views::transform([](auto const& send_job) {return std::make_pair(send_job.queue_id(), send_job.timestamps().data());})
+            );
+
+        for (auto&& ts : timestamps) {
+           if (ts.second.empty()) {
+              static auto fake = tx_timestamps::value_type{0, dpdkx::ns_timer() /*device.read_clock()*/ - NS_PER_S/2};
+              ts.second = std::span<tx_timestamps::value_type const>{&fake, 1};
+              BOOST_LOG_SEV(log::get(), boost::log::trivial::warning) << "Seems like packets in queue " << ts.first << " received before they were sent, packet round trip statistic in not reliable... ";
+           }
+        }
+        rx_channel->stats().process(options, timestamps);
+           
     }
     
     if (struct rte_eth_stats stats; rte_eth_stats_get(device.port_id(), &stats) >= 0)

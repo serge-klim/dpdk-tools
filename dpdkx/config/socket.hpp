@@ -1,4 +1,5 @@
 #pragma once
+#include "../detail/dpdk_type.hpp"
 #include "log.hpp"
 #include "rte_ether.h"
 #include "rte_ethdev.h"
@@ -13,10 +14,10 @@ namespace dpdkx { inline namespace v0 { namespace config {
 struct sockets {
     struct socket {
         unsigned int socket_id = static_cast<unsigned int>(SOCKET_ID_ANY);
-        std::span<std::uint32_t const> cores;
+        std::span<core_t const> cores;
     };
     std::vector<socket> sockets;
-    std::vector<std::uint32_t> cores;
+    std::vector<core_t> cores;
 };
 
 sockets socket_configuration();
